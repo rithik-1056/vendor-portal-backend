@@ -1,62 +1,43 @@
 const axios = require('axios');
+const https = require('https');
 
-exports.validateLogin = async (req, res) => {
-  const { vendorId, password } = req.body;
+const SAP_URL = process.env.SAP_URL;
+const SAP_AUTH = {
+  username: process.env.SAP_USERNAME,
+  password: process.env.SAP_PASSWORD
+};
+const httpsAgent = new https.Agent({ rejectUnauthorized: false });
 
-  console.log("🔐 Incoming login request:", vendorId, password);
+exports.vendorLogin = async (req, res) => {
+  const vendorId = req.query.VendorId;
+  const password = req.query.Password;
+
+  if (!vendorId || !password) {
+    return res.status(400).json({ success: false, message: 'vendorId and password are required' });
+  }
+
+  const baseUrl = SAP_URL.endsWith('/') ? SAP_URL.slice(0, -1) : SAP_URL;
 
   try {
-    // Step 1: Fetch CSRF token and session cookie
-    const authHeader = 'Basic ' + Buffer.from(`${process.env.SAP_USERNAME}:${process.env.SAP_PASSWORD}`).toString('base64');
+    const filter = encodeURIComponent(`VendorId eq '${vendorId}' and Password eq '${password}'`);
+    const filterUrl = `${baseUrl}/LoginDetailsSet?$filter=${filter}`;
 
-    const response = await axios.get(`${process.env.ODATA_URL}/LoginDetailsSet`, {  
-    headers: {
-    'Authorization': authHeader,
-    'X-CSRF-Token': 'Fetch'
-     }
+    const response = await axios.get(filterUrl, {
+      auth: SAP_AUTH,
+      headers: { 'Accept': 'application/json' },
+      httpsAgent
     });
 
-    const csrfToken = csrfResponse.headers['x-csrf-token'];
-    const cookies = csrfResponse.headers['set-cookie'];
+    const results = response.data.d.results;
 
-    if (!csrfToken || !cookies) {
-      return res.status(500).json({ message: 'Failed to retrieve CSRF token or cookies' });
-    }
-
-    // ✅ Step 2: Send POST to OData (Create Entity)
-    const odataPayload = {
-      VendorId: vendorId,
-      Password: password
-    };
-
-    const odataResponse = await axios.post(`${process.env.ODATA_URL}/LoginDetailsSet`, odataPayload, {
-      auth: {
-        username: process.env.SAP_USERNAME,
-        password: process.env.SAP_PASSWORD
-      },
-      headers: {
-        'X-CSRF-Token': csrfToken,
-        'Cookie': cookies.join(';'),
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-      }
-    });
-
-    const loginData = odataResponse.data?.d;
-
-    if (loginData?.VendorId) {
-      res.status(200).json({
-        vendorId: loginData.VendorId
-      });
+    if (results.length > 0) {
+      res.json({ success: true, message: 'Login successful' });
     } else {
-      res.status(401).json({ message: 'Login failed - Invalid data received' });
+      res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
-
   } catch (err) {
-    console.error('🚨 Login Error:', err.response?.data || err.message);
-    res.status(401).json({
-      message: 'Invalid Vendor ID or Password',
-      details: err.response?.data || err.message
-    });
+    console.error('SAP Error:', err);
+    const errorMsg = err.response?.data?.error?.message?.value || err.message || 'Unknown SAP error';
+    res.status(500).json({ success: false, message: `Error calling SAP: ${errorMsg}` });
   }
 };
